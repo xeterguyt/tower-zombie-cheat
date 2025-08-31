@@ -1,65 +1,101 @@
+-- core.lua (host this on GitHub raw)
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
-local player = game.Players.LocalPlayer
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
 
--- Put your GitHub RAW link here so script reloads after teleport
-queue_on_teleport([[
-    loadstring(game:HttpGet("https://raw.githubusercontent.com/xeterguyt/tower-zombie-cheat/refs/heads/main/core"))()
-]])
+-- GANTI INI jika path raw-mu beda. Jika file ini di repo yg sama, set ke raw link file ini.
+local RAW = "https://raw.githubusercontent.com/xeterguyt/tower-zombie-cheat/main/core.lua"
 
-local oldJobId = game.JobId -- current server JobId
+-- helper: cari fungsi queue_on_teleport dari executor
+local function get_qot()
+    if queue_on_teleport then return queue_on_teleport end
+    if syn and syn.queue_on_teleport then return syn.queue_on_teleport end
+    if fluxus and fluxus.queue_on_teleport then return fluxus.queue_on_teleport end
+    if secure_load and secure_load.queue_on_teleport then return secure_load.queue_on_teleport end
+    return nil
+end
+local qot = get_qot()
 
--- Function to get a different server
-local function findNewServer()
-    local placeId = game.PlaceId
-    local cursor = ""
-    local servers = {}
+-- re-queue sendiri untuk run setelah teleport (penting: lakukan SEBELUM teleport)
+pcall(function()
+    if qot then
+        qot('loadstring(game:HttpGet("'..RAW..'"))()')
+        print("[AutoFarm] queued self for next teleport")
+    else
+        warn("[AutoFarm] queue_on_teleport NOT found on this executor")
+    end
+end)
 
-    repeat
-        local url = ("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100&cursor=%s"):format(placeId, cursor)
-        local response = HttpService:JSONDecode(game:HttpGet(url))
-        for _, s in ipairs(response.data) do
-            if s.playing < s.maxPlayers and s.id ~= oldJobId then
-                table.insert(servers, s.id)
+print("[AutoFarm] started. JobId:", game.JobId)
+
+local function runCheckpoints()
+    local ok, err = pcall(function()
+        local folder = workspace:WaitForChild("CheckpointSpawns")
+        local char = player.Character or player.CharacterAdded:Wait()
+        local hrp = char:WaitForChild("HumanoidRootPart")
+        for i = 0, 11 do
+            local part = folder:FindFirstChild(tostring(i))
+            if part and part:IsA("BasePart") then
+                hrp.CFrame = part.CFrame
+                task.wait(0.3)
             end
         end
-        cursor = response.nextPageCursor or ""
-    until cursor == "" or #servers > 0
-
-    return servers
+    end)
+    if not ok then warn("[AutoFarm] runCheckpoints failed:", err) end
 end
 
--- Function to teleport to a guaranteed different server
-local function joinDifferentServer()
+-- cepat-cepat cari server valid (cek sampai N halaman, return pertama yg valid)
+local function findNewServer(maxPages)
+    maxPages = maxPages or 3
     local placeId = game.PlaceId
-    local servers
-
-    repeat
-        servers = findNewServer()
-        if #servers == 0 then
-            task.wait(2) -- retry if no servers found
+    local cursor = ""
+    for page = 1, maxPages do
+        local url = ("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100%s")
+            :format(placeId, (cursor ~= "" and "&cursor="..cursor) or "")
+        local ok, resp = pcall(function() return game:HttpGet(url) end)
+        if not ok or not resp then
+            warn("[AutoFarm] HttpGet failed page", page)
+            break
         end
-    until #servers > 0
-
-    local chosen = servers[math.random(1, #servers)]
-    TeleportService:TeleportToPlaceInstance(placeId, chosen, player)
+        local ok2, data = pcall(function() return HttpService:JSONDecode(resp) end)
+        if not ok2 or not data or not data.data then
+            warn("[AutoFarm] JSON decode failed page", page)
+            break
+        end
+        for _, s in ipairs(data.data) do
+            if s.playing < s.maxPlayers and s.id ~= game.JobId then
+                return s.id -- langsung return untuk kecepatan
+            end
+        end
+        cursor = data.nextPageCursor or ""
+        if cursor == "" then break end
+    end
+    return nil
 end
 
--- Function to run through checkpoints
-local function runCheckpoints()
-    local folder = workspace:WaitForChild("CheckpointSpawns")
-    for i = 0, 11 do
-        local part = folder:FindFirstChild(tostring(i))
-        if part then
-            player.Character:MoveTo(part.Position)
-            task.wait(0.3)
+local function joinDifferentServer()
+    while true do
+        local candidate = findNewServer(3) -- cek sampai 3 halaman (cepat)
+        if candidate then
+            print("[AutoFarm] found new server:", candidate)
+            -- re-queue lagi (double-safe) sebelum teleport
+            pcall(function()
+                if qot then qot('loadstring(game:HttpGet("'..RAW..'"))()') end
+            end)
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, candidate, player)
+            task.wait(10) -- safety; eksekusi akan berhenti karena teleport
+            return
+        else
+            print("[AutoFarm] no server found, retry in 2s")
+            task.wait(2)
         end
     end
 end
 
--- Main infinite loop
+-- loop utama (jalan terus sampai kamu tutup Roblox)
 while true do
-    task.wait(3) -- short wait before starting
     runCheckpoints()
-    joinDifferentServer() -- teleport away
+    joinDifferentServer()
+    task.wait(3)
 end
