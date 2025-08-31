@@ -4,7 +4,7 @@ local player = game.Players.LocalPlayer
 
 -- Put your GitHub RAW link here so script reloads after teleport
 queue_on_teleport([[
-    loadstring(game:HttpGet("YOUR_RAW_SCRIPT_LINK_HERE"))()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/xeterguyt/tower-zombie-cheat/refs/heads/main/core"))()
 ]])
 
 local oldJobId = game.JobId -- current server JobId
